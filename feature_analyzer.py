@@ -3,7 +3,7 @@ Feature aggregation, alignment, and analysis functions
 """
 import pandas as pd
 import numpy as np
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import pearsonr, spearmanr, skew, kurtosis
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -682,22 +682,25 @@ class FeatureAnalyzer:
         plt.tight_layout()
         plt.show()
     
-    def plot_top_features(self, results_df, measure='sharpe_ratio', top_n=30, 
-                         figsize=(12, 10), ascending=False):
-        """Visualize top N features sorted by a specified measure
+    def plot_top_features(self, results_df, measure='sharpe_ratio', top_n=15, 
+                         figsize=(14, 10), ascending=False):
+        """Visualize top and bottom N features sorted by a specified measure
+        
+        Shows both top N (highest) and bottom N (lowest) features. If bottom values
+        are all 0 or top values are all 0, only shows the non-zero group.
         
         Args:
             results_df: DataFrame from analyze_all_features() with feature analysis results
             measure: Column name to sort by (e.g., 'sharpe_ratio', 'pearson_r', 'spearman_r', 't_stat')
-            top_n: Number of top features to display (default: 30)
-            figsize: Figure size tuple (default: (12, 10))
+            top_n: Number of top and bottom features to display (default: 15)
+            figsize: Figure size tuple (default: (14, 10))
             ascending: Whether to sort in ascending order (default: False for descending)
                       Set to True for p-values or negative metrics
             
         Example:
             >>> analyzer = FeatureAnalyzer()
             >>> results = analyzer.analyze_all_features(df, feature_cols)
-            >>> analyzer.plot_top_features(results, measure='sharpe_ratio', top_n=30)
+            >>> analyzer.plot_top_features(results, measure='sharpe_ratio', top_n=15)
         """
         if measure not in results_df.columns:
             raise ValueError(f"Measure '{measure}' not found in results DataFrame. "
@@ -712,38 +715,99 @@ class FeatureAnalyzer:
             return
         
         # Sort by measure
-        df_plot = df_plot.sort_values(measure, ascending=ascending).head(top_n)
+        df_sorted = df_plot.sort_values(measure, ascending=ascending)
         
-        # Create figure
-        fig, ax = plt.subplots(figsize=figsize)
+        # Get top N and bottom N
+        df_top = df_sorted.head(top_n).copy()
+        df_bottom = df_sorted.tail(top_n).copy()
         
-        # Create horizontal bar plot
-        y_pos = np.arange(len(df_plot))
-        colors = plt.cm.viridis(np.linspace(0, 1, len(df_plot)))
+        # Check if we need to filter zeros
+        top_has_nonzero = (df_top[measure] != 0).any() if len(df_top) > 0 else False
+        bottom_has_nonzero = (df_bottom[measure] != 0).any() if len(df_bottom) > 0 else False
         
-        bars = ax.barh(y_pos, df_plot[measure].values, color=colors)
+        # Filter out zeros if needed
+        if top_has_nonzero and not bottom_has_nonzero:
+            # Only show top if bottom is all zeros
+            df_top = df_top[df_top[measure] != 0].head(top_n)
+            df_bottom = pd.DataFrame()
+        elif bottom_has_nonzero and not top_has_nonzero:
+            # Only show bottom if top is all zeros
+            df_bottom = df_bottom[df_bottom[measure] != 0].head(top_n)
+            df_top = pd.DataFrame()
+        else:
+            # Both have non-zero values, filter zeros from each
+            df_top = df_top[df_top[measure] != 0].head(top_n)
+            df_bottom = df_bottom[df_bottom[measure] != 0].head(top_n)
         
-        # Customize plot
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(df_plot['feature'].values, fontsize=9)
-        ax.set_xlabel(measure.replace('_', ' ').title(), fontsize=12, fontweight='bold')
-        ax.set_title(f'Top {len(df_plot)} Features by {measure.replace("_", " ").title()}', 
-                     fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3, axis='x')
+        # Determine number of subplots needed
+        n_plots = 0
+        if len(df_top) > 0:
+            n_plots += 1
+        if len(df_bottom) > 0:
+            n_plots += 1
         
-        # Add value labels on bars
-        for i, (idx, row) in enumerate(df_plot.iterrows()):
-            value = row[measure]
-            ax.text(value, i, f' {value:.4f}', 
-                   va='center', fontsize=8, fontweight='bold')
+        if n_plots == 0:
+            print(f"All values for measure '{measure}' are zero. Nothing to plot.")
+            return
         
-        # Invert y-axis so highest values are at top
-        ax.invert_yaxis()
+        # Create figure with subplots
+        fig, axes = plt.subplots(1, n_plots, figsize=figsize)
+        if n_plots == 1:
+            axes = [axes]  # Make it iterable
+        
+        plot_idx = 0
+        
+        # Plot top features
+        if len(df_top) > 0:
+            ax = axes[plot_idx]
+            y_pos = np.arange(len(df_top))
+            colors = plt.cm.viridis(np.linspace(0, 1, len(df_top)))
+            
+            bars = ax.barh(y_pos, df_top[measure].values, color=colors)
+            
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(df_top['feature'].values, fontsize=9)
+            ax.set_xlabel(measure.replace('_', ' ').title(), fontsize=12, fontweight='bold')
+            ax.set_title(f'Top {len(df_top)} Features by {measure.replace("_", " ").title()}', 
+                        fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3, axis='x')
+            
+            # Add value labels on bars
+            for i, (idx, row) in enumerate(df_top.iterrows()):
+                value = row[measure]
+                ax.text(value, i, f' {value:.4f}', 
+                       va='center', fontsize=8, fontweight='bold')
+            
+            ax.invert_yaxis()
+            plot_idx += 1
+        
+        # Plot bottom features
+        if len(df_bottom) > 0:
+            ax = axes[plot_idx]
+            y_pos = np.arange(len(df_bottom))
+            colors = plt.cm.plasma(np.linspace(0, 1, len(df_bottom)))
+            
+            bars = ax.barh(y_pos, df_bottom[measure].values, color=colors)
+            
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(df_bottom['feature'].values, fontsize=9)
+            ax.set_xlabel(measure.replace('_', ' ').title(), fontsize=12, fontweight='bold')
+            ax.set_title(f'Bottom {len(df_bottom)} Features by {measure.replace("_", " ").title()}', 
+                        fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3, axis='x')
+            
+            # Add value labels on bars
+            for i, (idx, row) in enumerate(df_bottom.iterrows()):
+                value = row[measure]
+                ax.text(value, i, f' {value:.4f}', 
+                       va='center', fontsize=8, fontweight='bold')
+            
+            ax.invert_yaxis()
         
         plt.tight_layout()
         plt.show()
         
-        return fig, ax
+        return fig, axes
     
     def analyze_pairwise_correlations(self, df, feature_cols=None, method='pearson', 
                                       figsize=(16, 14), top_pairs=20):
@@ -861,6 +925,167 @@ class FeatureAnalyzer:
         print(top_correlations_df[['feature_1', 'feature_2', 'correlation']].to_string(index=False))
         
         return corr_matrix, top_correlations_df
+    
+    def analyze_feature_distributions(self, df, feature_cols=None, sample_size=12, 
+                                     figsize=(16, 10)):
+        """Analyze feature distributions with summary statistics and visualizations
+        
+        Provides a comprehensive analysis of feature distributions including:
+        - Summary statistics table
+        - Sample histogram grid (showing subset of features)
+        - Box plot summary
+        
+        Args:
+            df: DataFrame with features
+            feature_cols: List of feature column names (if None, auto-detect)
+            sample_size: Number of features to show in histogram grid (default: 12)
+            figsize: Figure size tuple (default: (16, 10))
+            
+        Returns:
+            DataFrame: Summary statistics for all features
+            
+        Example:
+            >>> analyzer = FeatureAnalyzer()
+            >>> stats_df = analyzer.analyze_feature_distributions(df_clean)
+        """
+        
+        # Get feature columns
+        if feature_cols is None:
+            feature_cols = [col for col in df.columns 
+                           if col not in ['date', 'spy_return', 'spy_return_next']]
+        
+        # Extract feature data
+        feature_data = df[feature_cols].copy()
+        
+        # Remove columns with all NaN or constant values
+        feature_data = feature_data.loc[:, feature_data.nunique() > 1]
+        feature_cols = [col for col in feature_cols if col in feature_data.columns]
+        
+        if len(feature_cols) == 0:
+            print("No valid features found for distribution analysis")
+            return None
+        
+        print(f"Analyzing distributions for {len(feature_cols)} features...")
+        
+        # Calculate summary statistics
+        stats_list = []
+        for col in feature_cols:
+            values = feature_data[col].dropna()
+            if len(values) > 0:
+                stats_list.append({
+                    'feature': col,
+                    'count': len(values),
+                    'mean': np.mean(values),
+                    'std': np.std(values),
+                    'min': np.min(values),
+                    'max': np.max(values),
+                    'median': np.median(values),
+                    'q25': np.percentile(values, 25),
+                    'q75': np.percentile(values, 75),
+                    'skewness': skew(values),
+                    'kurtosis': kurtosis(values),
+                    'missing_pct': (df[col].isna().sum() / len(df)) * 100
+                })
+        
+        stats_df = pd.DataFrame(stats_list)
+        
+        # Create visualizations
+        fig = plt.figure(figsize=figsize)
+        
+        # Select features to visualize (sample by variance or randomly)
+        # Select features with highest variance for better visualization
+        stats_df_sorted = stats_df.sort_values('std', ascending=False)
+        sample_features = stats_df_sorted.head(sample_size)['feature'].tolist()
+        
+        # Plot 1: Histogram grid for sample features
+        n_cols = 4
+        n_rows = int(np.ceil(len(sample_features) / n_cols))
+        
+        for idx, feat in enumerate(sample_features):
+            ax = plt.subplot(n_rows, n_cols, idx + 1)
+            values = feature_data[feat].dropna()
+            if len(values) > 0:
+                ax.hist(values, bins=30, alpha=0.7, edgecolor='black')
+                ax.set_title(f'{feat}\n(μ={np.mean(values):.3f}, σ={np.std(values):.3f})', 
+                           fontsize=9)
+                ax.set_xlabel('Value', fontsize=8)
+                ax.set_ylabel('Frequency', fontsize=8)
+                ax.grid(True, alpha=0.3)
+        
+        plt.suptitle(f'Feature Distribution Histograms (Sample of {len(sample_features)} Features)', 
+                    fontsize=14, fontweight='bold', y=0.995)
+        plt.tight_layout()
+        plt.show()
+        
+        # Plot 2: Box plot summary (showing distribution spread)
+        fig, ax = plt.subplots(figsize=(14, 6))
+        
+        # Prepare data for box plot (select top features by variance)
+        box_features = stats_df_sorted.head(min(20, len(stats_df)))['feature'].tolist()
+        box_data = [feature_data[feat].dropna().values for feat in box_features]
+        
+        bp = ax.boxplot(box_data, labels=box_features, vert=True, patch_artist=True)
+        
+        # Color boxes
+        colors = plt.cm.Set3(np.linspace(0, 1, len(bp['boxes'])))
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+        
+        ax.set_ylabel('Feature Value', fontsize=12, fontweight='bold')
+        ax.set_title(f'Feature Distribution Box Plots (Top {len(box_features)} Features by Variance)', 
+                    fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+        plt.xticks(rotation=45, ha='right', fontsize=8)
+        plt.tight_layout()
+        plt.show()
+        
+        # Plot 3: Summary statistics visualization
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # Mean vs Std scatter
+        axes[0, 0].scatter(stats_df['mean'], stats_df['std'], alpha=0.6, s=50)
+        axes[0, 0].set_xlabel('Mean', fontsize=11, fontweight='bold')
+        axes[0, 0].set_ylabel('Standard Deviation', fontsize=11, fontweight='bold')
+        axes[0, 0].set_title('Mean vs Standard Deviation', fontsize=12, fontweight='bold')
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # Skewness distribution
+        axes[0, 1].hist(stats_df['skewness'], bins=30, alpha=0.7, edgecolor='black', color='skyblue')
+        axes[0, 1].axvline(x=0, color='red', linestyle='--', linewidth=2, label='Normal (skew=0)')
+        axes[0, 1].set_xlabel('Skewness', fontsize=11, fontweight='bold')
+        axes[0, 1].set_ylabel('Number of Features', fontsize=11, fontweight='bold')
+        axes[0, 1].set_title('Distribution of Skewness', fontsize=12, fontweight='bold')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # Missing data percentage
+        missing_sorted = stats_df.sort_values('missing_pct', ascending=False).head(15)
+        axes[1, 0].barh(range(len(missing_sorted)), missing_sorted['missing_pct'], 
+                       color='coral', alpha=0.7)
+        axes[1, 0].set_yticks(range(len(missing_sorted)))
+        axes[1, 0].set_yticklabels(missing_sorted['feature'], fontsize=8)
+        axes[1, 0].set_xlabel('Missing Percentage (%)', fontsize=11, fontweight='bold')
+        axes[1, 0].set_title('Top 15 Features by Missing Data', fontsize=12, fontweight='bold')
+        axes[1, 0].grid(True, alpha=0.3, axis='x')
+        axes[1, 0].invert_yaxis()
+        
+        # Range (max - min) distribution
+        stats_df['range'] = stats_df['max'] - stats_df['min']
+        axes[1, 1].hist(stats_df['range'], bins=30, alpha=0.7, edgecolor='black', color='lightgreen')
+        axes[1, 1].set_xlabel('Range (Max - Min)', fontsize=11, fontweight='bold')
+        axes[1, 1].set_ylabel('Number of Features', fontsize=11, fontweight='bold')
+        axes[1, 1].set_title('Distribution of Feature Ranges', fontsize=12, fontweight='bold')
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        plt.suptitle('Feature Distribution Summary Statistics', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        plt.show()
+        
+        print("\n" + "="*80)
+        print("Distribution analysis complete")
+        print("="*80)
+        
+        return stats_df
 
 
 def run():
@@ -877,4 +1102,14 @@ def run():
     feature_cols = [col for col in df_clean.columns if col not in ['date', 'spy_return', 'spy_return_next']]
     feature_analysis_results = feature_analyzer.analyze_all_features(df_clean, feature_cols)
     feature_analysis_results.head(20)
+    # correlation matrix
+    corr_matrix, top_correlations = feature_analyzer.analyze_pairwise_correlations(
+        df_clean,
+        feature_cols=feature_cols,
+        method='pearson',
+        figsize=(16, 14),
+        top_pairs=20
+    )
+    # distribution analysis
+    stats_df = feature_analyzer.analyze_feature_distributions(df_clean, feature_cols)
 
