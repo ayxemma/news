@@ -1,14 +1,4 @@
 {
-    "elastic_net": {
-        "hyperparameters": {
-            "alpha": 0.01,
-            "l1_ratio": 0.2
-        },
-        "cv_performance": {
-            "mean_r2": -0.001966132209072846,
-            "std_r2": 0.002361281346092206
-        }
-    },
     "random_forest": {
         "hyperparameters": {
             "max_depth": 2,
@@ -16,8 +6,8 @@
             "n_estimators": 500
         },
         "cv_performance": {
-            "mean_r2": -0.03006185408709543,
-            "std_r2": 0.026576762330555878
+            "mean_r2": -0.030061854087095476,
+            "std_r2": 0.026576762330555854
         }
     },
     "xgboost": {
