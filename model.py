@@ -533,7 +533,7 @@ class NewsSentimentModeler:
         # Evaluate ensemble model
         if len(self.models) > 0:
             print("\n" + "="*60)
-            print("ENSEMBLE MODEL (Simple Average)")
+            print("ENSEMBLE MODEL (80% XGBoost, 10% LightGBM, 10% Random Forest)")
             print("="*60)
             
             # Evaluate ensemble on test set
