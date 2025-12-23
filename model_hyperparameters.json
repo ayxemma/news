@@ -1,0 +1,46 @@
+{
+    "elastic_net": {
+        "hyperparameters": {
+            "alpha": 0.01,
+            "l1_ratio": 0.2
+        },
+        "cv_performance": {
+            "mean_r2": -0.001966132209072846,
+            "std_r2": 0.002361281346092206
+        }
+    },
+    "random_forest": {
+        "hyperparameters": {
+            "max_depth": 2,
+            "min_samples_split": 100,
+            "n_estimators": 500
+        },
+        "cv_performance": {
+            "mean_r2": -0.03006185408709543,
+            "std_r2": 0.026576762330555878
+        }
+    },
+    "xgboost": {
+        "hyperparameters": {
+            "learning_rate": 0.01,
+            "max_depth": 3,
+            "n_estimators": 200
+        },
+        "cv_performance": {
+            "mean_r2": -0.05528336560109404,
+            "std_r2": 0.036468309910151
+        }
+    },
+    "lightgbm": {
+        "hyperparameters": {
+            "learning_rate": 0.01,
+            "max_depth": 3,
+            "n_estimators": 200,
+            "num_leaves": 31
+        },
+        "cv_performance": {
+            "mean_r2": -0.04864510572972369,
+            "std_r2": 0.0326483156393981
+        }
+    }
+}
