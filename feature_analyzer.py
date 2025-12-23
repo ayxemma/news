@@ -99,8 +99,6 @@ class FeatureAnalyzer:
         normalized_cols = [f'{f}_normalized' for f in features_to_normalize]
         df[normalized_cols] = df[normalized_cols].ffill().fillna(0)
         
-        print(f"Created normalized columns: {', '.join(normalized_cols)}")
-        
         return df
     
     def _aggregate_features_core(self, df_features, groupby_keys, print_prefix=""):
