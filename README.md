@@ -246,10 +246,9 @@ factor_results = backtester.run_factor_neutral_analysis(
 - `StrategyBacktester`: Strategy construction and backtesting
   - Signal normalization (z-score, rank)
   - Position sizing (continuous, discrete)
-  - Volatility targeting
-  - Transaction cost modeling
-  - Performance metrics calculation
-  - Factor-neutral analysis
+  - Volatility targeting (optional)
+  - Performance metrics calculation (Sharpe, drawdown, turnover, hit rate)
+  - Factor-neutral analysis using Fama-French factors
 
 ## 📊 Data Requirements
 
@@ -309,6 +308,8 @@ The pipeline evaluates models on multiple metrics:
 - **Sharpe Ratio**: Risk-adjusted returns
 - **Max Drawdown**: Maximum peak-to-trough decline
 - **Turnover**: Average daily position changes
+- **Hit Rate**: Percentage of profitable trades
+- **Calmar Ratio**: Return to max drawdown ratio
 
 ## 🤝 Contributing
 
