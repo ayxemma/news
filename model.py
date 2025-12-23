@@ -7,13 +7,13 @@ import numpy as np
 import json
 import os
 import matplotlib.pyplot as plt
-from sklearn.linear_model import ElasticNet
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, make_scorer
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
 import xgboost as xgb
+import lightgbm as lgb
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -84,78 +84,6 @@ class NewsSentimentModeler:
         
         return X, y, feature_cols
     
-    def train_elastic_net(self, X_train, y_train, cv_folds=5):
-        """Train Elastic Net model with GridSearchCV
-        
-        Args:
-            X_train: Training feature matrix
-            y_train: Training target vector
-            cv_folds: Number of CV folds
-            
-        Returns:
-            dict: Best model and CV results
-        """
-        print("\nTraining Elastic Net model...")
-        
-        # Time series cross-validation
-        tscv = TimeSeriesSplit(n_splits=cv_folds)
-        
-        # Create pipeline with scaler and model
-        pipe = Pipeline([
-            ("scaler", StandardScaler()),
-            ("model", ElasticNet(max_iter=20000, random_state=42))
-        ])
-        
-        # Hyperparameter grid
-        param_grid = {
-            "model__alpha": [1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0],
-            "model__l1_ratio": [0.0, 0.2, 0.5, 0.8, 1.0]
-        }
-        
-        # Create R² scorer (GridSearchCV maximizes, so we use R² directly)
-        r2_scorer = make_scorer(r2_score)
-        
-        # GridSearchCV
-        gscv = GridSearchCV(
-            estimator=pipe,
-            param_grid=param_grid,
-            cv=tscv,
-            scoring=r2_scorer,
-            n_jobs=-1,
-            return_train_score=True
-        )
-        
-        gscv.fit(X_train, y_train)
-        
-        # Extract best model and scaler from pipeline
-        best_model = gscv.best_estimator_.named_steps['model']
-        scaler = gscv.best_estimator_.named_steps['scaler']
-        
-        # Extract best parameters (remove 'model__' prefix)
-        best_params = {k.replace('model__', ''): v for k, v in gscv.best_params_.items()}
-        
-        # Create CV scores DataFrame from GridSearchCV results
-        cv_results = gscv.cv_results_
-        cv_scores = []
-        for i, params in enumerate(cv_results['params']):
-            cv_scores.append({
-                'alpha': params['model__alpha'],
-                'l1_ratio': params['model__l1_ratio'],
-                'mean_r2': cv_results['mean_test_score'][i],
-                'std_r2': cv_results['std_test_score'][i]
-            })
-        
-        print(f"Best parameters: alpha={best_params['alpha']}, l1_ratio={best_params['l1_ratio']}")
-        print(f"Best CV R²: {gscv.best_score_:.4f}")
-        
-        return {
-            'model': best_model,
-            'scaler': scaler,
-            'params': best_params,
-            'cv_scores': pd.DataFrame(cv_scores),
-            'grid_search': gscv
-        }
-    
     def train_random_forest(self, X_train, y_train, cv_folds=5):
         """Train Random Forest model with GridSearchCV
         
@@ -178,8 +106,8 @@ class NewsSentimentModeler:
         # Hyperparameter grid
         param_grid = {
             'n_estimators': [200, 500],
-            'max_depth': [5, 10, None],
-            'min_samples_split': [2, 5, 10]
+            'max_depth': [2, 4, 6],
+            'min_samples_split': [10, 30, 100]
         }
         
         # Create R² scorer
@@ -292,6 +220,76 @@ class NewsSentimentModeler:
             'grid_search': gscv
         }
     
+    def train_lightgbm(self, X_train, y_train, cv_folds=5):
+        """Train LightGBM model with GridSearchCV
+        
+        Args:
+            X_train: Training feature matrix
+            y_train: Training target vector
+            cv_folds: Number of CV folds
+            
+        Returns:
+            dict: Best model and CV results
+        """
+        print("\nTraining LightGBM model...")
+        
+        # Time series cross-validation
+        tscv = TimeSeriesSplit(n_splits=cv_folds)
+        
+        # Base model
+        base_model = lgb.LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1)
+        
+        # Hyperparameter grid
+        param_grid = {
+            'n_estimators': [200, 500],
+            'max_depth': [3, 5, 7],
+            'learning_rate': [0.01, 0.1, 0.3],
+            'num_leaves': [31, 50, 100]
+        }
+        
+        # Create R² scorer
+        r2_scorer = make_scorer(r2_score)
+        
+        # GridSearchCV
+        gscv = GridSearchCV(
+            estimator=base_model,
+            param_grid=param_grid,
+            cv=tscv,
+            scoring=r2_scorer,
+            n_jobs=-1,
+            return_train_score=True
+        )
+        
+        gscv.fit(X_train, y_train)
+        
+        # Extract best model
+        best_model = gscv.best_estimator_
+        best_params = gscv.best_params_
+        
+        # Create CV scores DataFrame from GridSearchCV results
+        cv_results = gscv.cv_results_
+        cv_scores = []
+        for i, params in enumerate(cv_results['params']):
+            cv_scores.append({
+                'n_estimators': params['n_estimators'],
+                'max_depth': params['max_depth'],
+                'learning_rate': params['learning_rate'],
+                'num_leaves': params['num_leaves'],
+                'mean_r2': cv_results['mean_test_score'][i],
+                'std_r2': cv_results['std_test_score'][i]
+            })
+        
+        print(f"Best parameters: {best_params}")
+        print(f"Best CV R²: {gscv.best_score_:.4f}")
+        
+        return {
+            'model': best_model,
+            'scaler': None,  # LightGBM doesn't need scaling
+            'params': best_params,
+            'cv_scores': pd.DataFrame(cv_scores),
+            'grid_search': gscv
+        }
+    
     def evaluate_model(self, model, scaler, X, y, set_name=''):
         """Evaluate model performance
         
@@ -345,29 +343,77 @@ class NewsSentimentModeler:
         return results
     
     def predict_ensemble(self, X):
-        """Make ensemble predictions by averaging predictions from all models
+        """Make ensemble predictions using weighted average of specific models
+        
+        Uses weighted combination:
+        - 80% XGBoost
+        - 10% LightGBM
+        - 10% Random Forest
         
         Args:
             X: Feature matrix
             
         Returns:
-            numpy array: Ensemble predictions (simple average of all model predictions)
+            numpy array: Ensemble predictions (weighted average)
         """
         if not self.models:
             raise ValueError("No models trained yet. Call train_all_models() first.")
         
-        predictions_list = []
+        predictions_dict = {}
         
-        for model_name, model_dict in self.models.items():
-            if model_dict['scaler'] is not None:
-                X_scaled = model_dict['scaler'].transform(X)
-                y_pred = model_dict['model'].predict(X_scaled)
+        # Get predictions from specific models only (exclude ensemble)
+        ensemble_models = ['xgboost', 'lightgbm', 'random_forest']
+        
+        for model_name in ensemble_models:
+            if model_name in self.models:
+                model_dict = self.models[model_name]
+                if model_dict['scaler'] is not None:
+                    X_scaled = model_dict['scaler'].transform(X)
+                    y_pred = model_dict['model'].predict(X_scaled)
+                else:
+                    y_pred = model_dict['model'].predict(X)
+                predictions_dict[model_name] = y_pred
+        
+        # Define weights: 80% XGBoost, 10% LightGBM, 10% Random Forest
+        weights = {
+            'xgboost': 0.8,
+            'lightgbm': 0.1,
+            'random_forest': 0.1
+        }
+        
+        # Compute weighted average using only available models
+        ensemble_pred = None
+        total_weight = 0
+        
+        for model_name, weight in weights.items():
+            if model_name in predictions_dict:
+                if ensemble_pred is None:
+                    ensemble_pred = weight * predictions_dict[model_name]
+                else:
+                    ensemble_pred += weight * predictions_dict[model_name]
+                total_weight += weight
+        
+        # Normalize if weights don't sum to 1 (in case some models are missing)
+        if total_weight > 0 and total_weight != 1.0:
+            ensemble_pred = ensemble_pred / total_weight
+        
+        # Fallback: if none of the preferred models are available, use simple average of all models
+        if ensemble_pred is None:
+            all_predictions = []
+            for model_name, model_dict in self.models.items():
+                if model_name == 'ensemble':
+                    continue
+                if model_dict['scaler'] is not None:
+                    X_scaled = model_dict['scaler'].transform(X)
+                    y_pred = model_dict['model'].predict(X_scaled)
+                else:
+                    y_pred = model_dict['model'].predict(X)
+                all_predictions.append(y_pred)
+            
+            if len(all_predictions) > 0:
+                ensemble_pred = np.mean(all_predictions, axis=0)
             else:
-                y_pred = model_dict['model'].predict(X)
-            predictions_list.append(y_pred)
-        
-        # Simple average of all predictions
-        ensemble_pred = np.mean(predictions_list, axis=0)
+                raise ValueError("No models available for ensemble prediction")
         
         return ensemble_pred
     
@@ -430,14 +476,14 @@ class NewsSentimentModeler:
         X_train, y_train, feature_cols = self.prepare_features_target(df_train)
         print(f"\nTraining on {len(X_train):,} samples with {len(feature_cols)} features")
         
-        # Train Elastic Net
-        self.models['elastic_net'] = self.train_elastic_net(X_train, y_train, cv_folds)
-        
         # Train Random Forest
         self.models['random_forest'] = self.train_random_forest(X_train, y_train, cv_folds)
         
         # Train XGBoost
         self.models['xgboost'] = self.train_xgboost(X_train, y_train, cv_folds)
+        
+        # Train LightGBM
+        self.models['lightgbm'] = self.train_lightgbm(X_train, y_train, cv_folds)
         
         print("\n" + "="*60)
         print("MODEL TRAINING COMPLETE")
@@ -483,11 +529,6 @@ class NewsSentimentModeler:
                 set_name='Out-of-Sample Set'
             )
             self.oos_results[model_name] = oos_results
-        
-        # Evaluate ensemble model
-        print("\n" + "="*60)
-        print("ENSEMBLE MODEL (Simple Average)")
-        print("="*60)
         
         # Evaluate ensemble model
         if len(self.models) > 0:
@@ -557,21 +598,53 @@ class NewsSentimentModeler:
         
         return pd.DataFrame(results_list)
     
-    def run_full_pipeline(self, df, cv_folds=5):
+    def run_full_pipeline(self, df, cv_folds=5, hyperparameters_file='model_hyperparameters.json', overwrite=False):
         """Run the complete modeling pipeline
+        
+        Checks if hyperparameters file exists. If it exists, loads models from saved
+        hyperparameters. Otherwise, trains models with time series cross-validation
+        and saves the hyperparameters.
         
         Args:
             df: Full dataframe with features
             cv_folds: Number of CV folds (default: 5)
-            
+            hyperparameters_file: Path to hyperparameters JSON file (default: 'model_hyperparameters.json')
+            overwrite: Whether to overwrite the hyperparameters file if it exists (default: False)
         Returns:
             DataFrame: Results summary
         """
         # Split data
         df_train, df_test, df_oos = self.split_data_by_date(df)
         
-        # Train models
-        self.train_all_models(df_train, cv_folds)
+        # Prepare training data
+        X_train, y_train, feature_cols = self.prepare_features_target(df_train)
+        
+        # Check if hyperparameters file exists
+        if os.path.exists(hyperparameters_file) and not overwrite:
+            print("\n" + "="*60)
+            print(f"HYPERPARAMETERS FILE FOUND: {hyperparameters_file}")
+            print("LOADING MODELS FROM SAVED HYPERPARAMETERS")
+            print("="*60)
+            
+            # Load hyperparameters
+            hyperparameters = self.load_best_hyperparameters(hyperparameters_file)
+            
+            # Recreate models from saved hyperparameters
+            self.recreate_models_from_hyperparameters(hyperparameters, X_train, y_train)
+        else:
+            print("\n" + "="*60)
+            print("NO HYPERPARAMETERS FILE FOUND OR OVERWRITE IS TRUE")
+            print("TRAINING MODELS WITH TIME SERIES CROSS-VALIDATION")
+            print("="*60)
+            
+            # Train models with cross-validation
+            self.train_all_models(df_train, cv_folds)
+            
+            # Save hyperparameters after training
+            print("\n" + "="*60)
+            print("SAVING BEST HYPERPARAMETERS")
+            print("="*60)
+            self.save_best_hyperparameters(hyperparameters_file)
         
         # Evaluate models
         self.evaluate_all_models(df_test, df_oos)
@@ -584,7 +657,7 @@ class NewsSentimentModeler:
     def save_best_hyperparameters(self, filepath='model_hyperparameters.json'):
         """Save best hyperparameters from time series cross-validation
         
-        Saves the best hyperparameters for each model (Elastic Net, Random Forest, XGBoost)
+        Saves the best hyperparameters for each model (Random Forest, XGBoost, LightGBM)
         along with their CV performance metrics to a JSON file.
         
         Args:
@@ -722,29 +795,6 @@ class NewsSentimentModeler:
         
         self.models = {}
         
-        # Recreate Elastic Net
-        if 'elastic_net' in hyperparameters:
-            print("\nRecreating Elastic Net model...")
-            params = hyperparameters['elastic_net']['hyperparameters']
-            scaler = StandardScaler()
-            X_train_scaled = scaler.fit_transform(X_train)
-            
-            model = ElasticNet(
-                alpha=params['alpha'],
-                l1_ratio=params['l1_ratio'],
-                max_iter=20000,
-                random_state=42
-            )
-            model.fit(X_train_scaled, y_train)
-            
-            self.models['elastic_net'] = {
-                'model': model,
-                'scaler': scaler,
-                'params': params,
-                'cv_scores': pd.DataFrame([hyperparameters['elastic_net']['cv_performance']])
-            }
-            print(f"  Trained with alpha={params['alpha']}, l1_ratio={params['l1_ratio']}")
-        
         # Recreate Random Forest
         if 'random_forest' in hyperparameters:
             print("\nRecreating Random Forest model...")
@@ -786,6 +836,30 @@ class NewsSentimentModeler:
                 'scaler': None,
                 'params': params,
                 'cv_scores': pd.DataFrame([hyperparameters['xgboost']['cv_performance']])
+            }
+            print(f"  Trained with {params}")
+        
+        # Recreate LightGBM
+        if 'lightgbm' in hyperparameters:
+            print("\nRecreating LightGBM model...")
+            params = hyperparameters['lightgbm']['hyperparameters']
+            
+            model = lgb.LGBMRegressor(
+                n_estimators=params['n_estimators'],
+                max_depth=params['max_depth'],
+                learning_rate=params['learning_rate'],
+                num_leaves=params['num_leaves'],
+                random_state=42,
+                n_jobs=-1,
+                verbose=-1
+            )
+            model.fit(X_train, y_train)
+            
+            self.models['lightgbm'] = {
+                'model': model,
+                'scaler': None,
+                'params': params,
+                'cv_scores': pd.DataFrame([hyperparameters['lightgbm']['cv_performance']])
             }
             print(f"  Trained with {params}")
         
@@ -1002,6 +1076,91 @@ class NewsSentimentModeler:
         
         return fig, axes
     
+    def generate_predictions(self, X, model_names=None):
+        """Generate predictions from all trained models and ensemble
+        
+        Args:
+            X: Feature matrix for prediction
+            model_names: List of model names to generate predictions for. 
+                        If None, generates predictions for all trained models.
+                        
+        Returns:
+            dict: Dictionary mapping model name -> predictions array
+            
+        Example:
+            >>> modeler = NewsSentimentModeler()
+            >>> modeler.train_all_models(df_train)
+            >>> X_test, y_test, _ = modeler.prepare_features_target(df_test)
+            >>> predictions = modeler.generate_predictions(X_test)
+            >>> print(predictions.keys())  # ['random_forest', 'xgboost', 'lightgbm', 'ensemble']
+        """
+        if not self.models:
+            raise ValueError("No models trained yet. Call train_all_models() first.")
+        
+        if model_names is None:
+            model_names = list(self.models.keys())
+        
+        predictions = {}
+        
+        print("Generating predictions from all models...")
+        print("="*60)
+        
+        for model_name in model_names:
+            if model_name not in self.models:
+                print(f"Warning: Model '{model_name}' not found. Skipping.")
+                continue
+            
+            model_dict = self.models[model_name]
+            
+            # Scale features if scaler is provided
+            if model_dict['scaler'] is not None:
+                X_scaled = model_dict['scaler'].transform(X)
+                pred = model_dict['model'].predict(X_scaled)
+            else:
+                pred = model_dict['model'].predict(X)
+            
+            predictions[model_name] = pred
+            print(f"{model_name.replace('_', ' ').title()}: {len(pred)} predictions")
+        
+        # Generate ensemble predictions using weighted average
+        # 80% XGBoost, 10% LightGBM, 10% Random Forest
+        ensemble_models = ['xgboost', 'lightgbm', 'random_forest']
+        available_ensemble_models = [k for k in ensemble_models if k in predictions]
+        
+        if len(available_ensemble_models) > 0:
+            # Define weights: 80% XGBoost, 10% LightGBM, 10% Random Forest
+            weights = {
+                'xgboost': 0.8,
+                'lightgbm': 0.1,
+                'random_forest': 0.1
+            }
+            
+            # Compute weighted average using only available models
+            ensemble_pred = None
+            total_weight = 0
+            
+            for model_name in available_ensemble_models:
+                weight = weights[model_name]
+                if ensemble_pred is None:
+                    ensemble_pred = weight * predictions[model_name]
+                else:
+                    ensemble_pred += weight * predictions[model_name]
+                total_weight += weight
+            
+            # Normalize if weights don't sum to 1 (in case some models are missing)
+            if total_weight > 0 and total_weight != 1.0:
+                ensemble_pred = ensemble_pred / total_weight
+            
+            predictions['ensemble'] = ensemble_pred
+            weight_str = ', '.join([f"{int(weights[m]*100)}% {m.replace('_', ' ').title()}" 
+                                   for m in available_ensemble_models])
+            print(f"Ensemble (weighted: {weight_str}): {len(ensemble_pred)} predictions")
+        
+        print("="*60)
+        print(f"Total strategies to backtest: {len(predictions)}")
+        
+        return predictions
+    
     def load_and_evaluate_on_test(self, hyperparameters_file, df_train, df_test):
         """Load best hyperparameters, recreate models, and evaluate on test data
         
@@ -1055,7 +1214,7 @@ class NewsSentimentModeler:
         
         # Evaluate ensemble model
         print("\n" + "="*60)
-        print("ENSEMBLE MODEL (Simple Average)")
+        print("ENSEMBLE MODEL")
         print("="*60)
         ensemble_test_results = self.evaluate_ensemble(X_test, y_test, set_name='Test Set')
         test_results['ensemble'] = ensemble_test_results
