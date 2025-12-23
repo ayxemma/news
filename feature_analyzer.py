@@ -279,7 +279,26 @@ class FeatureAnalyzer:
         print("\n" + "="*60)
         print("Feature aggregation and normalization complete")
         print("="*60)
+
+        # Clip normalized features at 1st and 99th percentile to handle outliers
+        # Only clip the normalized feature columns (not date column)
+        normalized_cols = [col for col in normalized_features.columns 
+                          if col.endswith('_normalized')]
         
+        if len(normalized_cols) > 0:
+            # Get quantiles for normalized columns
+            lower_bounds = normalized_features[normalized_cols].quantile(0.01, axis=0)
+            upper_bounds = normalized_features[normalized_cols].quantile(0.99, axis=0)
+            
+            # Clip each normalized column individually
+            for col in normalized_cols:
+                normalized_features[col] = normalized_features[col].clip(
+                    lower=lower_bounds[col], 
+                    upper=upper_bounds[col]
+                )
+            
+            print(f"Clipped {len(normalized_cols)} normalized features at 1st and 99th percentiles")
+
         return normalized_features
 
     def align_features_with_spy(self, daily_features, df_spy):
@@ -1040,42 +1059,23 @@ class FeatureAnalyzer:
         plt.show()
         
         # Plot 3: Summary statistics visualization
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
         
         # Mean vs Std scatter
-        axes[0, 0].scatter(stats_df['mean'], stats_df['std'], alpha=0.6, s=50)
-        axes[0, 0].set_xlabel('Mean', fontsize=11, fontweight='bold')
-        axes[0, 0].set_ylabel('Standard Deviation', fontsize=11, fontweight='bold')
-        axes[0, 0].set_title('Mean vs Standard Deviation', fontsize=12, fontweight='bold')
-        axes[0, 0].grid(True, alpha=0.3)
+        axes[0].scatter(stats_df['mean'], stats_df['std'], alpha=0.6, s=50)
+        axes[0].set_xlabel('Mean', fontsize=11, fontweight='bold')
+        axes[0].set_ylabel('Standard Deviation', fontsize=11, fontweight='bold')
+        axes[0].set_title('Mean vs Standard Deviation', fontsize=12, fontweight='bold')
+        axes[0].grid(True, alpha=0.3)
         
         # Skewness distribution
-        axes[0, 1].hist(stats_df['skewness'], bins=30, alpha=0.7, edgecolor='black', color='skyblue')
-        axes[0, 1].axvline(x=0, color='red', linestyle='--', linewidth=2, label='Normal (skew=0)')
-        axes[0, 1].set_xlabel('Skewness', fontsize=11, fontweight='bold')
-        axes[0, 1].set_ylabel('Number of Features', fontsize=11, fontweight='bold')
-        axes[0, 1].set_title('Distribution of Skewness', fontsize=12, fontweight='bold')
-        axes[0, 1].legend()
-        axes[0, 1].grid(True, alpha=0.3)
-        
-        # Missing data percentage
-        missing_sorted = stats_df.sort_values('missing_pct', ascending=False).head(15)
-        axes[1, 0].barh(range(len(missing_sorted)), missing_sorted['missing_pct'], 
-                       color='coral', alpha=0.7)
-        axes[1, 0].set_yticks(range(len(missing_sorted)))
-        axes[1, 0].set_yticklabels(missing_sorted['feature'], fontsize=8)
-        axes[1, 0].set_xlabel('Missing Percentage (%)', fontsize=11, fontweight='bold')
-        axes[1, 0].set_title('Top 15 Features by Missing Data', fontsize=12, fontweight='bold')
-        axes[1, 0].grid(True, alpha=0.3, axis='x')
-        axes[1, 0].invert_yaxis()
-        
-        # Range (max - min) distribution
-        stats_df['range'] = stats_df['max'] - stats_df['min']
-        axes[1, 1].hist(stats_df['range'], bins=30, alpha=0.7, edgecolor='black', color='lightgreen')
-        axes[1, 1].set_xlabel('Range (Max - Min)', fontsize=11, fontweight='bold')
-        axes[1, 1].set_ylabel('Number of Features', fontsize=11, fontweight='bold')
-        axes[1, 1].set_title('Distribution of Feature Ranges', fontsize=12, fontweight='bold')
-        axes[1, 1].grid(True, alpha=0.3)
+        axes[1].hist(stats_df['skewness'], bins=30, alpha=0.7, edgecolor='black', color='skyblue')
+        axes[1].axvline(x=0, color='red', linestyle='--', linewidth=2, label='Normal (skew=0)')
+        axes[1].set_xlabel('Skewness', fontsize=11, fontweight='bold')
+        axes[1].set_ylabel('Number of Features', fontsize=11, fontweight='bold')
+        axes[1].set_title('Distribution of Skewness', fontsize=12, fontweight='bold')
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
         
         plt.suptitle('Feature Distribution Summary Statistics', fontsize=14, fontweight='bold')
         plt.tight_layout()
@@ -1086,6 +1086,500 @@ class FeatureAnalyzer:
         print("="*80)
         
         return stats_df
+    
+    def generate_feature_groups(self, feature_cols):
+        """Automatically generate feature groups from feature column names
+        
+        Categorizes features into groups based on naming patterns:
+        - sentiment: sentiment_score, sentiment_ratio (including category-specific)
+        - complexity: complexity features (including category-specific)
+        - token_length: average_token_length, headline_tokens (including category-specific)
+        - volume: headline_count features (including category-specific)
+        - uncertainty: uncertainty-related features
+        
+        Args:
+            feature_cols: List of feature column names
+            
+        Returns:
+            dict: Mapping of group name -> list of feature names
+            
+        Example:
+            >>> feature_cols = ['sentiment_score', 'complexity', 'POLITICS_sentiment_score', ...]
+            >>> groups = analyzer.generate_feature_groups(feature_cols)
+            >>> print(groups)
+            {'sentiment': [...], 'complexity': [...], 'token_length': [...], ...}
+        """
+        groups = {
+            'sentiment': [],
+            'complexity': [],
+            'token_length': [],
+            'volume': [],
+            'uncertainty': []
+        }
+        
+        for feat in feature_cols:
+            feat_lower = feat.lower()
+            
+            # Categorize features (treat category-specific and overall features the same)
+            if 'sentiment' in feat_lower:
+                groups['sentiment'].append(feat)
+            elif 'complexity' in feat_lower:
+                groups['complexity'].append(feat)
+            elif 'token' in feat_lower or 'length' in feat_lower:
+                groups['token_length'].append(feat)
+            elif 'count' in feat_lower or 'volume' in feat_lower:
+                groups['volume'].append(feat)
+            elif 'uncertainty' in feat_lower:
+                groups['uncertainty'].append(feat)
+            else:
+                # If no match, assign to sentiment as default (most common type)
+                groups['sentiment'].append(feat)
+        
+        # Remove empty groups
+        groups = {k: v for k, v in groups.items() if len(v) > 0}
+        
+        # Print summary
+        print("="*80)
+        print("FEATURE GROUPS GENERATED")
+        print("="*80)
+        print(f"\nTotal features: {len(feature_cols)}")
+        print(f"Number of groups: {len(groups)}")
+        print("\nGroup breakdown:")
+        for group_name, features in sorted(groups.items()):
+            print(f"  {group_name}: {len(features)} features")
+        print("="*80)
+        
+        return groups
+    
+    def compute_forward_returns(self, df, close_col='spy_return', horizons=[1, 2, 3, 4, 5, 7, 10, 14]):
+        """Compute forward log-returns for multiple horizons
+        
+        Args:
+            df: DataFrame with date index and close prices/returns
+            close_col: Column name for close prices or returns (default: 'spy_return')
+            horizons: List of forward horizons in days (default: [1, 2, 3, 4, 5, 7, 10, 14])
+            
+        Returns:
+            DataFrame: Forward returns with columns ret_1, ret_2, etc.
+        """
+        df = df.copy()
+        df = df.sort_index() if isinstance(df.index, pd.DatetimeIndex) else df.sort_values('date')
+        
+        forward_returns = {}
+        
+        for h in horizons:
+            if h <= 0:
+                continue
+            
+            # Compute forward return: log(close.shift(-h) / close)
+            # For returns, we can use cumulative return: (1 + ret).cumprod()
+            if close_col in df.columns:
+                if 'return' in close_col.lower():
+                    # If it's already returns, compute cumulative forward return
+                    forward_ret = np.log((1 + df[close_col]).shift(-h) / (1 + df[close_col]))
+                else:
+                    # If it's prices, compute log return
+                    forward_ret = np.log(df[close_col].shift(-h) / df[close_col])
+                
+                forward_returns[f'ret_{h}'] = forward_ret
+        
+        return pd.DataFrame(forward_returns, index=df.index)
+    
+    def compute_feature_sharpe(self, feature, returns, horizon=1, window=60, min_obs=250):
+        """Compute Sharpe ratio for a feature using rolling z-score signal
+        
+        Args:
+            feature: Series of feature values
+            returns: Series of forward returns
+            horizon: Forward horizon in days for proper annualization (default: 1)
+            window: Rolling window for z-score normalization (default: 60)
+            min_obs: Minimum observations required (default: 250)
+            
+        Returns:
+            dict: Sharpe ratio and related metrics
+        """
+        # Align feature and returns
+        aligned = pd.DataFrame({
+            'feature': feature,
+            'return': returns
+        }).dropna()
+        
+        if len(aligned) < min_obs:
+            return {
+                'sharpe': np.nan,
+                'mean_return': np.nan,
+                'std_return': np.nan,
+                'n_obs': len(aligned)
+            }
+        
+        # Compute rolling z-score signal
+        rolling_mean = aligned['feature'].rolling(window=window, min_periods=30).mean()
+        rolling_std = aligned['feature'].rolling(window=window, min_periods=30).std()
+        z_signal = (aligned['feature'] - rolling_mean) / rolling_std
+        z_signal = z_signal.fillna(0)
+        
+        # Compute positions: +1 if signal > 0, -1 if signal < 0, 0 if |signal| < 0.25
+        positions = pd.Series(0, index=aligned.index)
+        positions[z_signal > 0] = 1
+        positions[z_signal < 0] = -1
+        positions[z_signal.abs() < 0.25] = 0
+        
+        # Strategy returns
+        strategy_returns = positions * aligned['return']
+        strategy_returns = strategy_returns.dropna()
+        
+        if len(strategy_returns) < min_obs:
+            return {
+                'sharpe': np.nan,
+                'mean_return': np.nan,
+                'std_return': np.nan,
+                'n_obs': len(strategy_returns)
+            }
+        
+        # Annualize Sharpe
+        # For h-day forward returns, annualization factors:
+        # Mean: multiply by (252/h) to get annualized mean
+        # Std: multiply by sqrt(252/h) to get annualized std
+        mean_ret = strategy_returns.mean()
+        std_ret = strategy_returns.std()
+        
+        # Annualize based on horizon
+        annualized_mean = mean_ret * (252 / horizon)
+        annualized_std = std_ret * np.sqrt(252 / horizon)
+        
+        sharpe = annualized_mean / annualized_std if annualized_std > 0 else np.nan
+        
+        return {
+            'sharpe': sharpe,
+            'mean_return': mean_ret,
+            'std_return': std_ret,
+            'n_obs': len(strategy_returns)
+        }
+    
+    def compute_feature_correlations(self, feature, returns):
+        """Compute Spearman and Pearson correlations for a feature
+        
+        Args:
+            feature: Series of feature values
+            returns: Series of forward returns
+            
+        Returns:
+            dict: Correlation metrics
+        """
+        # Align feature and returns
+        aligned = pd.DataFrame({
+            'feature': feature,
+            'return': returns
+        }).dropna()
+        
+        if len(aligned) < 30:
+            return {
+                'spearman_r': np.nan,
+                'spearman_p': np.nan,
+                'pearson_r': np.nan,
+                'pearson_p': np.nan,
+                'n_obs': len(aligned)
+            }
+        
+        # Compute correlations
+        spearman_r, spearman_p = spearmanr(aligned['feature'], aligned['return'])
+        pearson_r, pearson_p = pearsonr(aligned['feature'], aligned['return'])
+        
+        return {
+            'spearman_r': spearman_r,
+            'spearman_p': spearman_p,
+            'pearson_r': pearson_r,
+            'pearson_p': pearson_p,
+            'n_obs': len(aligned)
+        }
+    
+    def analyze_horizon_selection(self, df, feature_groups, horizons=[1, 2, 3, 4, 5, 7, 10, 14],
+                                 close_col='spy_return_next', window=60, min_obs=250):
+        """Analyze optimal prediction horizon using Sharpe-first priority
+        
+        Args:
+            df: DataFrame with features and target returns
+            feature_groups: Dict mapping group name -> list of feature columns, OR
+                           list of feature column names (will be grouped as 'all_features')
+            close_col: Column name for forward returns (default: 'spy_return_next')
+            horizons: List of forward horizons in days (default: [1, 2, 3, 4, 5, 7, 10, 14])
+            window: Rolling window for z-score (default: 60)
+            min_obs: Minimum observations required (default: 250)
+            
+        Returns:
+            dict: Analysis results including feature metrics, group summaries, and rankings
+        """
+        print("="*80)
+        print("HORIZON SELECTION ANALYSIS (Sharpe-First Priority)")
+        print("="*80)
+        
+        # Handle both dict and list inputs for feature_groups
+        if isinstance(feature_groups, list):
+            # If list provided, create a single group called 'all_features'
+            feature_groups = {'all_features': feature_groups}
+        elif not isinstance(feature_groups, dict):
+            raise ValueError("feature_groups must be either a dict or a list of feature names")
+        
+        # Ensure horizons don't exceed 14 days
+        horizons = [h for h in horizons if h <= 14]
+        horizons = sorted(horizons)
+        
+        print(f"\nAnalyzing horizons: {horizons} days")
+        print(f"Feature groups: {list(feature_groups.keys())}")
+        
+        # Step 1: Compute forward returns for each horizon
+        print("\nStep 1: Computing forward returns...")
+        forward_returns = {}
+        
+        # For each horizon, we need to compute forward cumulative returns
+        # Since we have spy_return_next, we'll create forward returns
+        df_work = df.copy()
+        
+        if 'date' in df_work.columns:
+            df_work = df_work.set_index('date')
+        
+        df_work = df_work.sort_index()
+        
+        # Create forward returns for each horizon
+        # Since spy_return_next is already 1-day forward return, we need to compute
+        # cumulative returns over h days by compounding
+        for h in horizons:
+            if close_col in df_work.columns:
+                if h == 1:
+                    forward_returns[f'ret_{h}'] = df_work[close_col]
+                else:
+                    # Cumulative return over h days: (1+r1)*(1+r2)*...*(1+rh) - 1
+                    # Convert to log returns for easier computation
+                    cumulative_ret = np.log(1 + df_work[close_col]).copy()
+                    for i in range(1, h):
+                        cumulative_ret = cumulative_ret + np.log(1 + df_work[close_col].shift(-i).fillna(0))
+                    # Convert back to simple returns
+                    forward_returns[f'ret_{h}'] = np.exp(cumulative_ret) - 1
+        
+        forward_returns_df = pd.DataFrame(forward_returns, index=df_work.index)
+        
+        # Step 2: Compute feature-level metrics for each (feature, horizon)
+        print("\nStep 2: Computing feature-level metrics...")
+        feature_metrics_list = []
+        
+        all_features = []
+        for group, features in feature_groups.items():
+            all_features.extend([(f, group) for f in features if f in df_work.columns])
+        
+        print(f"Total features to analyze: {len(all_features)}")
+        
+        for feature_name, group in all_features:
+            feature_series = df_work[feature_name]
+            
+            for h in horizons:
+                ret_col = f'ret_{h}'
+                if ret_col not in forward_returns_df.columns:
+                    continue
+                
+                returns_series = forward_returns_df[ret_col]
+                
+                # Compute Sharpe
+                sharpe_result = self.compute_feature_sharpe(
+                    feature_series, returns_series, horizon=h, window=window, min_obs=min_obs
+                )
+                
+                # Compute correlations
+                corr_result = self.compute_feature_correlations(feature_series, returns_series)
+                
+                feature_metrics_list.append({
+                    'horizon': h,
+                    'feature': feature_name,
+                    'group': group,
+                    'sharpe': sharpe_result['sharpe'],
+                    'spearman_r': corr_result['spearman_r'],
+                    'pearson_r': corr_result['pearson_r'],
+                    'n_obs': max(sharpe_result['n_obs'], corr_result['n_obs'])
+                })
+        
+        df_feature_metrics = pd.DataFrame(feature_metrics_list)
+        
+        print(f"Computed metrics for {len(df_feature_metrics)} feature-horizon combinations")
+        
+        # Step 3: Group-level aggregation (Sharpe-first)
+        print("\nStep 3: Aggregating by group...")
+        group_summary_list = []
+        
+        for group in feature_groups.keys():
+            for h in horizons:
+                group_data = df_feature_metrics[
+                    (df_feature_metrics['group'] == group) & 
+                    (df_feature_metrics['horizon'] == h)
+                ]
+                
+                if len(group_data) == 0:
+                    continue
+                
+                # Sharpe metrics (PRIMARY)
+                sharpe_vals = group_data['sharpe'].dropna()
+                median_sharpe = sharpe_vals.median()
+                top_quartile_sharpe = sharpe_vals.quantile(0.75)
+                max_sharpe = sharpe_vals.max()
+                count_sharpe_pos = (sharpe_vals > 0).sum()
+                
+                # Spearman metrics (SECONDARY)
+                spearman_vals = group_data['spearman_r'].dropna()
+                median_spearman = spearman_vals.median()
+                top_quartile_spearman = spearman_vals.quantile(0.75)
+                
+                # Pearson metrics (TERTIARY)
+                pearson_vals = group_data['pearson_r'].dropna()
+                median_pearson = pearson_vals.median()
+                
+                group_summary_list.append({
+                    'horizon': h,
+                    'group': group,
+                    'median_sharpe': median_sharpe,
+                    'top_quartile_sharpe': top_quartile_sharpe,
+                    'max_sharpe': max_sharpe,
+                    'count_sharpe_pos': count_sharpe_pos,
+                    'median_spearman': median_spearman,
+                    'top_quartile_spearman': top_quartile_spearman,
+                    'median_pearson': median_pearson,
+                    'n_features': len(group_data)
+                })
+        
+        df_group_summary = pd.DataFrame(group_summary_list)
+        
+        # Print group-level statistics
+        print("\n" + "="*80)
+        print("GROUP-LEVEL STATISTICS BY HORIZON")
+        print("="*80)
+        
+        for group in sorted(df_group_summary['group'].unique()):
+            group_data = df_group_summary[df_group_summary['group'] == group].sort_values('horizon')
+            print(f"\n{group.upper().replace('_', ' ')}:")
+            print("-" * 60)
+            print(group_data[['horizon', 'median_sharpe', 'top_quartile_sharpe', 'max_sharpe', 
+                             'count_sharpe_pos', 'median_spearman', 'top_quartile_spearman', 
+                             'median_pearson', 'n_features']].to_string(index=False))
+        
+        print("\n" + "="*80)
+        
+        # Step 4: Horizon ranking
+        print("\nStep 4: Ranking horizons...")
+        horizon_ranking_list = []
+        
+        for h in horizons:
+            horizon_data = df_group_summary[df_group_summary['horizon'] == h]
+            
+            if len(horizon_data) == 0:
+                continue
+            
+            # Aggregate across all groups
+            median_sharpe = horizon_data['median_sharpe'].median()
+            top_quartile_sharpe = horizon_data['top_quartile_sharpe'].median()
+            median_spearman = horizon_data['median_spearman'].median()
+            median_pearson = horizon_data['median_pearson'].median()
+            
+            horizon_ranking_list.append({
+                'horizon': h,
+                'median_sharpe': median_sharpe,
+                'top_quartile_sharpe': top_quartile_sharpe,
+                'median_spearman': median_spearman,
+                'median_pearson': median_pearson
+            })
+        
+        df_horizon_ranking = pd.DataFrame(horizon_ranking_list)
+        
+        # Compute composite rank (Sharpe-first priority)
+        # Rank 1 = best, higher rank = worse
+        # NaN values are ranked last (worst) by default
+        df_horizon_ranking['rank_median_sharpe'] = df_horizon_ranking['median_sharpe'].rank(ascending=False, na_option='bottom')
+        df_horizon_ranking['rank_top_quartile_sharpe'] = df_horizon_ranking['top_quartile_sharpe'].rank(ascending=False, na_option='bottom')
+        df_horizon_ranking['rank_median_spearman'] = df_horizon_ranking['median_spearman'].abs().rank(ascending=False, na_option='bottom')
+        df_horizon_ranking['rank_median_pearson'] = df_horizon_ranking['median_pearson'].abs().rank(ascending=False, na_option='bottom')
+        
+        # Composite rank: weighted sum with Sharpe priority
+        df_horizon_ranking['composite_rank'] = (
+            0.5 * df_horizon_ranking['rank_median_sharpe'] +
+            0.3 * df_horizon_ranking['rank_top_quartile_sharpe'] +
+            0.15 * df_horizon_ranking['rank_median_spearman'] +
+            0.05 * df_horizon_ranking['rank_median_pearson']
+        )
+        
+        df_horizon_ranking = df_horizon_ranking.sort_values('composite_rank')
+        
+        print("\n" + "="*80)
+        print("HORIZON RANKING (Sharpe-First Priority)")
+        print("="*80)
+        print(df_horizon_ranking[['horizon', 'median_sharpe', 'top_quartile_sharpe', 
+                                  'median_spearman', 'median_pearson', 'composite_rank']].to_string(index=False))
+        
+        results = {
+            'feature_metrics': df_feature_metrics,
+            'group_summary': df_group_summary,
+            'horizon_ranking': df_horizon_ranking
+        }
+        
+        return results
+    
+    def plot_horizon_analysis(self, results, figsize=(16, 12)):
+        """Visualize horizon selection analysis with Sharpe-focused plots
+        
+        Args:
+            results: Dict from analyze_horizon_selection()
+            figsize: Figure size tuple
+            
+        Returns:
+            fig, axes: Matplotlib figure and axes
+        """
+        df_group_summary = results['group_summary']
+        df_horizon_ranking = results['horizon_ranking']
+        
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
+        fig.suptitle('Horizon Selection Analysis (Sharpe-First Priority)', 
+                     fontsize=16, fontweight='bold')
+        
+        # Plot 1: Heatmap - Median Sharpe by (group × horizon)
+        pivot_sharpe = df_group_summary.pivot(index='group', columns='horizon', values='median_sharpe')
+        sns.heatmap(pivot_sharpe, annot=True, fmt='.3f', cmap='RdYlGn', center=0,
+                   ax=axes[0, 0], cbar_kws={'label': 'Median Sharpe'})
+        axes[0, 0].set_title('Median Sharpe Ratio by Group × Horizon', fontweight='bold')
+        axes[0, 0].set_xlabel('Horizon (days)')
+        axes[0, 0].set_ylabel('Feature Group')
+        
+        # Plot 2: Line plot - Median Sharpe vs Horizon (one line per group)
+        groups = df_group_summary['group'].unique()
+        for group in groups:
+            group_data = df_group_summary[df_group_summary['group'] == group].sort_values('horizon')
+            axes[0, 1].plot(group_data['horizon'], group_data['median_sharpe'], 
+                          marker='o', label=group, linewidth=2)
+        axes[0, 1].set_title('Median Sharpe Ratio vs Horizon', fontweight='bold')
+        axes[0, 1].set_xlabel('Horizon (days)')
+        axes[0, 1].set_ylabel('Median Sharpe Ratio')
+        axes[0, 1].legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        axes[0, 1].grid(True, alpha=0.3)
+        axes[0, 1].axhline(y=0, color='black', linestyle='--', linewidth=0.5)
+        
+        # Plot 3: Heatmap - Median Spearman by (group × horizon)
+        pivot_spearman = df_group_summary.pivot(index='group', columns='horizon', values='median_spearman')
+        sns.heatmap(pivot_spearman, annot=True, fmt='.3f', cmap='RdYlGn', center=0,
+                   ax=axes[1, 0], cbar_kws={'label': 'Median Spearman'})
+        axes[1, 0].set_title('Median Spearman Correlation by Group × Horizon', fontweight='bold')
+        axes[1, 0].set_xlabel('Horizon (days)')
+        axes[1, 0].set_ylabel('Feature Group')
+        
+        # Plot 4: Horizon ranking bar chart
+        df_rank_sorted = df_horizon_ranking.sort_values('composite_rank')
+        axes[1, 1].barh(range(len(df_rank_sorted)), df_rank_sorted['median_sharpe'], 
+                       color='skyblue', alpha=0.7)
+        axes[1, 1].set_yticks(range(len(df_rank_sorted)))
+        axes[1, 1].set_yticklabels([f"{int(h)} days" for h in df_rank_sorted['horizon']])
+        axes[1, 1].set_xlabel('Median Sharpe Ratio', fontweight='bold')
+        axes[1, 1].set_title('Horizon Ranking by Composite Score', fontweight='bold')
+        axes[1, 1].grid(True, alpha=0.3, axis='x')
+        axes[1, 1].axvline(x=0, color='black', linestyle='-', linewidth=0.5)
+        axes[1, 1].invert_yaxis()
+        
+        plt.tight_layout()
+        plt.show()
+        
+        return fig, axes
 
 
 def run():
@@ -1100,6 +1594,21 @@ def run():
     df_clean = feature_analyzer.prepare_features_for_modeling(df_features, df_spy)
     print(df_clean.head())
     feature_cols = [col for col in df_clean.columns if col not in ['date', 'spy_return', 'spy_return_next']]
+    # analyze horizon selection
+    horizons = [1, 2, 3, 4, 5, 7, 10, 14]
+    # generate feature groups
+    feature_groups = feature_analyzer.generate_feature_groups(feature_cols)
+    results = feature_analyzer.analyze_horizon_selection(df_clean, feature_groups, horizons)
+    feature_analyzer.plot_horizon_analysis(results)
+    # use rolling 7 day, 14 day and 30 day z-score to analyze the horizon selection
+    for window in [7, 14, 30]:
+        df_rolling = df_clean[feature_cols].rolling(window=window).mean()
+        df_rolling = df_rolling.merge(df_clean[['date', 'spy_return', 'spy_return_next']], left_index=True, right_index=True)
+        results = feature_analyzer.analyze_horizon_selection(df_rolling, feature_groups, horizons)
+        feature_analyzer.plot_horizon_analysis(results)
+    # plot horizon analysis
+    feature_analyzer.plot_horizon_analysis(results)
+    # analyze all features
     feature_analysis_results = feature_analyzer.analyze_all_features(df_clean, feature_cols)
     feature_analysis_results.head(20)
     # correlation matrix
